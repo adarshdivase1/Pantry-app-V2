@@ -41,9 +41,9 @@ export const getSupabaseConfig = (): SupabaseConfig | null => {
   if (localData) return JSON.parse(localData);
 
   // 2. Check Environment Variables (Deployment / .env)
-  // Fix: Safely access import.meta.env to prevent crash if undefined in certain environments
-  const envUrl = import.meta.env?.VITE_SUPABASE_URL;
-  const envKey = import.meta.env?.VITE_SUPABASE_KEY;
+  // TypeScript-safe access to Vite env variables
+  const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
+  const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
 
   if (envUrl && envKey) {
       return { url: envUrl, key: envKey };
