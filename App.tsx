@@ -29,8 +29,8 @@ const App: React.FC = () => {
 
   // Initial load and Role Effect
   useEffect(() => {
-    seedInitialData(); 
-    loadItems();
+    // Try to seed data on first load (checks if empty internally)
+    seedInitialData().then(() => loadItems());
     
     if (userRole === 'staff') setCurrentView('dashboard');
     else if (userRole === 'guest') setCurrentView('inventory');
@@ -39,7 +39,6 @@ const App: React.FC = () => {
   // Real-time Synchronization
   useEffect(() => {
     const handleStorageChange = () => {
-      // We just reload items here. Toasts are handled by ToastNotifications listening to the same event source
       loadItems();
     };
 

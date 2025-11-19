@@ -7,6 +7,27 @@ const SUPABASE_CONFIG_KEY = 'pantry_supabase_config';
 
 let supabase: SupabaseClient | null = null;
 
+// --- Helper for Dates ---
+const getFutureDate = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split('T')[0];
+};
+
+// --- Default Seed Data ---
+const DEFAULT_ITEMS: Omit<PantryItem, 'id' | 'addedDate'>[] = [
+    { name: 'Bottled Water', quantity: 24, unit: Unit.BOTTLE, category: Category.BEVERAGES, expiryDate: getFutureDate(365) },
+    { name: 'Cola Cans', quantity: 12, unit: Unit.CAN, category: Category.BEVERAGES, expiryDate: getFutureDate(180) },
+    { name: 'Potato Chips', quantity: 10, unit: Unit.PACK, category: Category.SNACKS, expiryDate: getFutureDate(60) },
+    { name: 'Coffee Pods', quantity: 50, unit: Unit.PIECE, category: Category.BEVERAGES, expiryDate: getFutureDate(90) },
+    { name: 'Instant Noodles', quantity: 15, unit: Unit.CUP, category: Category.FOOD, expiryDate: getFutureDate(120) },
+    { name: 'Notebooks', quantity: 5, unit: Unit.PIECE, category: Category.STATIONERY, expiryDate: getFutureDate(700) },
+    { name: 'Pens (Blue)', quantity: 20, unit: Unit.PIECE, category: Category.STATIONERY, expiryDate: getFutureDate(700) },
+    { name: 'Green Tea', quantity: 20, unit: Unit.PACK, category: Category.BEVERAGES, expiryDate: getFutureDate(150) },
+    { name: 'Granola Bars', quantity: 18, unit: Unit.PIECE, category: Category.SNACKS, expiryDate: getFutureDate(45) },
+    { name: 'Phone Charger (USB-C)', quantity: 2, unit: Unit.PIECE, category: Category.ELECTRONICS, expiryDate: getFutureDate(1000) },
+];
+
 // --- Configuration ---
 
 export interface SupabaseConfig {
@@ -15,8 +36,20 @@ export interface SupabaseConfig {
 }
 
 export const getSupabaseConfig = (): SupabaseConfig | null => {
-  const data = localStorage.getItem(SUPABASE_CONFIG_KEY);
-  return data ? JSON.parse(data) : null;
+  // 1. Check LocalStorage (User manually entered settings)
+  const localData = localStorage.getItem(SUPABASE_CONFIG_KEY);
+  if (localData) return JSON.parse(localData);
+
+  // 2. Check Environment Variables (Deployment / .env)
+  // Fix: Safely access import.meta.env to prevent crash if undefined in certain environments
+  const envUrl = import.meta.env?.VITE_SUPABASE_URL;
+  const envKey = import.meta.env?.VITE_SUPABASE_KEY;
+
+  if (envUrl && envKey) {
+      return { url: envUrl, key: envKey };
+  }
+
+  return null;
 };
 
 export const initSupabase = (config: SupabaseConfig) => {
@@ -51,32 +84,32 @@ export const notifyNotification = (message: string, type: 'info' | 'success' = '
 const setupRealtime = () => {
     if (!supabase) return;
     
+    console.log("Setting up Supabase Realtime...");
     // Remove existing channels to prevent duplicates
     supabase.removeAllChannels();
 
     supabase
         .channel('pantry-updates')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'pantry_items' }, () => {
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'pantry_items' }, (payload) => {
             notifyChange();
         })
         // Listen specifically for NEW orders to trigger notifications
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload: any) => {
             const newOrder = payload.new;
-            // Handle snake_case from DB
             const roomNum = newOrder.room_number || newOrder.roomNumber || 'Unknown';
-            notifyNotification(`New Order Received: Room ${roomNum}`, 'info');
+            notifyNotification(`New Order: Room ${roomNum}`, 'info');
             notifyChange();
         })
         // Listen for status updates
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, (payload: any) => {
-             const newStatus = payload.new.status;
-             const oldStatus = payload.old.status;
-             // Optional: Notify if status changed (e.g. for Guest view)
              notifyChange();
+             if (payload.new.status === 'delivered' && payload.old.status !== 'delivered') {
+                 notifyNotification(`Order for Room ${payload.new.room_number} delivered`, 'success');
+             }
         })
         .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
-                console.log('Realtime connection established');
+                console.log('Connected to real-time updates');
             }
         });
 }
@@ -89,7 +122,7 @@ if (savedConfig) {
 
 // --- Helper for Local vs Cloud ---
 
-const isCloud = () => !!supabase;
+export const isCloud = () => !!supabase;
 
 // --- Items Management ---
 
@@ -97,7 +130,7 @@ export const getItems = async (): Promise<PantryItem[]> => {
   if (isCloud()) {
       const { data, error } = await supabase!.from('pantry_items').select('*').order('name');
       if (error) {
-          console.error("Supabase error", error);
+          console.error("Supabase error getting items:", error);
           return [];
       }
       return data.map((d: any) => ({
@@ -190,7 +223,10 @@ export const deleteItem = async (id: string) => {
 export const getOrders = async (): Promise<Order[]> => {
   if (isCloud()) {
       const { data, error } = await supabase!.from('orders').select('*').order('timestamp', { ascending: false });
-      if (error) return [];
+      if (error) {
+        console.error("Error fetching orders", error);
+        return [];
+      }
       return data.map((d: any) => ({
           ...d,
           roomNumber: d.room_number || d.roomNumber,
@@ -282,10 +318,46 @@ export const getLowStockItems = async (threshold = 10): Promise<PantryItem[]> =>
     return items.filter(i => i.quantity <= threshold && i.quantity > 0);
 };
 
+// --- Enhanced Seeding Function ---
+
 export const seedInitialData = async () => {
-    if (isCloud()) return;
+    const currentItems = await getItems();
     
-    const existing = await getItems();
-    if (existing.length > 0) return;
-    // Seed logic can be re-added here if needed
+    // Only seed if empty
+    if (currentItems.length > 0) {
+        console.log("Data already exists, skipping seed.");
+        return;
+    }
+
+    console.log("Initializing default inventory...");
+
+    if (isCloud()) {
+        // Cloud Seeding
+        const { error } = await supabase!.from('pantry_items').insert(
+            DEFAULT_ITEMS.map(item => ({
+                name: item.name,
+                quantity: item.quantity,
+                unit: item.unit,
+                category: item.category,
+                added_date: new Date().toISOString(),
+                expiry_date: item.expiryDate
+            }))
+        );
+        if (error) {
+            console.error("Failed to seed cloud database. Ensure tables exist and RLS policies allow insert.", error);
+        } else {
+            console.log("Cloud seeding complete.");
+            notifyChange();
+        }
+    } else {
+        // Local Seeding
+        const seedItems = DEFAULT_ITEMS.map(item => ({
+            ...item,
+            id: crypto.randomUUID(),
+            addedDate: new Date().toISOString(),
+        }));
+        localStorage.setItem(ITEMS_KEY, JSON.stringify(seedItems));
+        console.log("Local seeding complete.");
+        notifyChange();
+    }
 };

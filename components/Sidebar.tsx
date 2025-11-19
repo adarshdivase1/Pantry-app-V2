@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { LayoutDashboard, Coffee, ShoppingBag, Settings, PlusCircle, LogOut, Package } from 'lucide-react';
 import { View } from '../types';
+import { isCloud } from '../services/storageService';
 
 interface SidebarProps {
   currentView: View;
@@ -12,6 +13,15 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ currentView, setView, onAddClick, isStaff, onLogout, onSettingsClick }) => {
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    setConnected(isCloud());
+    const handleUpdate = () => setConnected(isCloud());
+    window.addEventListener('pantry-update', handleUpdate);
+    return () => window.removeEventListener('pantry-update', handleUpdate);
+  }, []);
+
   const staffNavItems = [
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
     { id: 'inventory', label: 'Inventory', icon: Package },
@@ -33,9 +43,12 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, setView, onAddClick, isS
           </div>
           <div className="ml-3 hidden lg:block">
             <h1 className="font-bold text-white text-lg leading-none tracking-tight">PantryApp</h1>
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                {isStaff ? 'Admin Console' : 'Guest Services'}
-            </span>
+            <div className="flex items-center mt-1">
+                 <div className={`w-2 h-2 rounded-full mr-1.5 ${connected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]' : 'bg-slate-500'}`}></div>
+                 <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    {connected ? 'Live Sync' : 'Local Mode'}
+                </span>
+            </div>
           </div>
         </div>
 
